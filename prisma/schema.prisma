@@ -1,0 +1,166 @@
+// Prisma Schema - 便宜機票搜尋器資料庫模型
+// 執行 `npx prisma db push` 來建立資料庫
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// 使用者設定
+model User {
+  id              String         @id @default(uuid())
+  telegramChatId  String         @unique
+  location        String         // 所在地區
+  
+  // 偏好設定
+  preferredAirports   String     // 逗號分隔的機場代碼
+  watchDestinations   String     // 關注的目的地
+  tripDurations       String     // 關注的行程天數 (逗號分隔)
+  priceThreshold      Int        @default(10000) // 價格警報閾值
+  
+  // 通知設定
+  notifyEnabled       Boolean    @default(true)
+  notifyTime          String?    // 偏好的通知時間
+  
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+  
+  subscriptions   Subscription[]
+  alerts          Alert[]
+}
+
+// 機票訂閱 (用於追蹤特定路線)
+model Subscription {
+  id              String    @id @default(uuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id])
+  
+  origin          String    // 出發機場
+  destination     String    // 目的地
+  tripDuration    Int       // 行程天數
+  
+  // 日期範圍
+  startDateFrom   DateTime?
+  startDateTo     DateTime?
+  
+  priceThreshold  Int?      // 此訂閱的特定價格閾值
+  
+  isActive        Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+// 機票記錄
+model Flight {
+  id              String    @id @default(uuid())
+  
+  // 航班資訊
+  airline         String    // 航空公司
+  flightNumber    String?   // 航班號
+  origin          String    // 出發機場
+  destination     String    // 目的地
+  
+  // 時間資訊
+  departureTime   DateTime  // 出發時間
+  arrivalTime     DateTime  // 抵達時間
+  flightDuration  Int       // 飛行時長 (分鐘)
+  
+  // 價格
+  price           Int       // 價格 (TWD)
+  currency        String    @default("TWD")
+  
+  // 機票類型
+  isRoundTrip     Boolean   @default(true)
+  returnFlightId  String?   // 回程航班 ID (如果是單獨查詢)
+  
+  // 回程航班資訊
+  returnDepartureTime DateTime?  // 回程出發時間
+  returnArrivalTime   DateTime?  // 回程抵達時間
+  returnFlightDuration Int?      // 回程飛行時長(分鐘)
+  returnAirline       String?    // 回程航空公司
+  returnStops         Int?       // 回程轉機次數
+
+  // 轉機
+  stops           Int       @default(0)
+
+  // 來源
+  source          String    // 資料來源 (skyscanner, serpapi 等)
+  bookingUrl      String?   // 訂票連結
+  
+  // 分析結果
+  tags            String?   // JSON 格式的標籤陣列
+  totalStayHours  Int?      // 總停留時數
+  effectiveHours  Int?      // 有效活動時數
+  
+  createdAt       DateTime  @default(now())
+  
+  priceHistory    PriceHistory[]
+}
+
+// 價格歷史記錄
+model PriceHistory {
+  id          String    @id @default(uuid())
+  flightId    String
+  flight      Flight    @relation(fields: [flightId], references: [id])
+  
+  price       Int
+  recordedAt  DateTime  @default(now())
+  
+  @@index([flightId, recordedAt])
+}
+
+// 通知警報記錄
+model Alert {
+  id          String    @id @default(uuid())
+  userId      String
+  user        User      @relation(fields: [userId], references: [id])
+  
+  type        String    // price_drop, new_deal, etc.
+  title       String
+  message     String
+  flightInfo  String    // JSON 格式的機票資訊
+  
+  isRead      Boolean   @default(false)
+  isSent      Boolean   @default(false)
+  sentAt      DateTime?
+  
+  createdAt   DateTime  @default(now())
+  
+  @@index([userId, createdAt])
+}
+
+// 機場資訊快取
+model Airport {
+  code        String    @id  // IATA 代碼
+  name        String
+  city        String
+  country     String
+  timezone    String
+  
+  updatedAt   DateTime  @updatedAt
+}
+
+// 搜尋任務記錄
+model SearchJob {
+  id          String    @id @default(uuid())
+  
+  origin      String
+  destination String
+  dateFrom    DateTime
+  dateTo      DateTime
+  tripDuration Int
+  
+  status      String    @default("pending") // pending, running, completed, failed
+  resultCount Int       @default(0)
+  error       String?
+  
+  startedAt   DateTime?
+  completedAt DateTime?
+  createdAt   DateTime  @default(now())
+  
+  @@index([status, createdAt])
+}

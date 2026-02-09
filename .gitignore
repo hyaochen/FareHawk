@@ -1,0 +1,63 @@
+# 依賴項目
+node_modules/
+dist/
+
+# 環境變數
+.env
+.env.local
+.env.*.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# 資料庫檔案
+*.db
+*.db-journal
+prisma/*.db
+prisma/*.db-journal
+
+# API 金鑰與 Token 設定
+secrets/
+*.key
+*.pem
+config.local.json
+
+# Claude Code
+.claude/
+
+# IDE 與編輯器
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 作業系統檔案
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# 日誌檔案
+logs/
+*.log
+npm-debug.log*
+
+# 測試覆蓋率
+coverage/
+
+# 暫存檔案
+tmp/
+temp/
+.cache/
+
+# Next.js (Web UI)
+web/.next/
+web/out/
+web/node_modules/
+
+# Playwright (爬蟲)
+playwright-report/
+test-results/
+
+# 偵錯截圖
+web/debug-screenshots/
