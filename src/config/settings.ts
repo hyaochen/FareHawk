@@ -23,6 +23,7 @@ const envSchema = z.object({
     SERPAPI_API_KEY: z.string().optional(),
     AMADEUS_API_KEY: z.string().optional(),
     AMADEUS_API_SECRET: z.string().optional(),
+    USE_SERPAPI: z.string().optional(),
 
     // 使用者設定
     USER_LOCATION: z.string().default('台北市'),
@@ -121,11 +122,10 @@ export const settings = {
 export function validateSettings(): { valid: boolean; errors: string[] } {
     const errors: string[] = [];
 
-    // 檢查必要的 API 設定
-    if (!settings.api.skyscanner.isConfigured &&
-        !settings.api.serpapi.isConfigured &&
-        !settings.api.amadeus.isConfigured) {
-        errors.push('至少需要配置一個機票 API (Skyscanner, SerpApi, 或 Amadeus)');
+    // 檢查 API 設定（僅在啟用 SerpAPI 時要求）
+    const useSerpApi = process.env.USE_SERPAPI === 'true';
+    if (useSerpApi && !settings.api.serpapi.isConfigured) {
+        errors.push('USE_SERPAPI=true 但未配置 SERPAPI_API_KEY');
     }
 
     // 檢查 Telegram 設定 (可選但建議)

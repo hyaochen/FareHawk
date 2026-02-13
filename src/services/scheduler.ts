@@ -8,9 +8,119 @@ import { settings } from '../config/settings.js';
 import { searchFlights } from '../core/flight-fetcher.js';
 import { analyzeFlights } from '../core/flight-analyzer.js';
 import { sortFlights, filterFlights, calculateStats } from '../core/flight-ranker.js';
-import { sendFlightAlert, sendSimpleNotification } from './telegram-bot.js';
+import { sendFlightAlert, sendSimpleNotification, sendMessage } from './telegram-bot.js';
 import type { SearchRequest, AlertMessage, FlightAnalysis } from '../types/index.js';
 import { addDays } from 'date-fns';
+
+// =====================================================
+// Web API 爬蟲搜尋（透過本地 Web 伺服器的 Playwright 爬蟲）
+// =====================================================
+
+/**
+ * 透過 Web API 觸發 Playwright 爬蟲搜尋並取得結果
+ * 不消耗任何付費 API 額度
+ */
+async function fetchFlightsViaWebApi(): Promise<any[]> {
+    const port = settings.web.port;
+    const params = new URLSearchParams({
+        refresh: 'true',
+        useApi: 'false',
+        location: settings.user.location,
+        airports: settings.user.preferredAirports.join(','),
+        destinations: settings.user.watchDestinations.join(','),
+        durations: settings.user.tripDurations.join(','),
+        priceThreshold: String(settings.user.priceThreshold),
+        searchDaysAhead: String(settings.search.daysAhead),
+    });
+
+    const url = `http://localhost:${port}/api/flights?${params}`;
+    console.log(`🌐 呼叫 Web API 搜尋（爬蟲模式）...`);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5 * 60 * 1000); // 5 分鐘超時
+
+    try {
+        const response = await fetch(url, { signal: controller.signal });
+        if (!response.ok) {
+            throw new Error(`Web API 回應錯誤: HTTP ${response.status}`);
+        }
+
+        const json = await response.json() as { success: boolean; data?: any[]; error?: string };
+        if (!json.success) {
+            throw new Error(`Web API 搜尋失敗: ${json.error}`);
+        }
+
+        return json.data || [];
+    } finally {
+        clearTimeout(timeout);
+    }
+}
+
+/**
+ * 格式化單筆機票為 Telegram 訊息（從 DB Flight 記錄）
+ */
+function formatSingleFlightMessage(f: any): string {
+    const depTime = new Date(f.departureTime);
+    const arrTime = new Date(f.arrivalTime);
+    const tags: string[] = JSON.parse(f.tags || '[]');
+
+    // 計算行程天數
+    let tripDays = 0;
+    if (f.returnFlightId) {
+        const retDate = new Date(f.returnFlightId);
+        if (!isNaN(retDate.getTime())) {
+            tripDays = Math.round((retDate.getTime() - depTime.getTime()) / (1000 * 60 * 60 * 24));
+        }
+    }
+
+    const outDate = depTime.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' });
+    const outTime = depTime.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+    const outArrival = arrTime.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+
+    let retDateStr = '';
+    if (f.returnFlightId && !isNaN(new Date(f.returnFlightId).getTime())) {
+        retDateStr = new Date(f.returnFlightId).toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit', weekday: 'short' });
+    }
+
+    let message = `✈️ *${f.destination}* 來回機票\n`;
+    message += `🛫 ${f.origin}\n\n`;
+
+    message += `💰 *機票價格：NT$ ${Number(f.price).toLocaleString()}*\n\n`;
+
+    message += `📅 ${outDate}`;
+    if (retDateStr) message += ` → ${retDateStr}`;
+    if (tripDays > 0) message += ` (${tripDays}天)`;
+    message += `\n`;
+
+    if (f.effectiveHours && f.effectiveHours > 0) {
+        message += `🎯 有效活動：約 ${f.effectiveHours} 小時\n`;
+    }
+    message += `\n`;
+
+    if (tags.length > 0) {
+        message += `🏷️ ${tags.join(' ')}\n\n`;
+    }
+
+    message += `*去程*：${f.airline} | ${outTime} → ${outArrival}`;
+    if (f.stops > 0) message += ` (轉${f.stops}次)`;
+    message += `\n`;
+
+    if (f.returnDepartureTime) {
+        const retDepTime = new Date(f.returnDepartureTime).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false });
+        const retArrTime = f.returnArrivalTime
+            ? new Date(f.returnArrivalTime).toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', hour12: false })
+            : '';
+        message += `*回程*：${f.returnAirline || f.airline} | ${retDepTime} → ${retArrTime}`;
+        if (f.returnStops && f.returnStops > 0) message += ` (轉${f.returnStops}次)`;
+        message += `\n`;
+    }
+
+    if (f.bookingUrl) {
+        message += `\n🔗 [查看詳情](${f.bookingUrl})`;
+    }
+
+    return message;
+}
 
 // =====================================================
 // 搜尋任務
@@ -208,34 +318,90 @@ async function saveFlightResults(flights: FlightAnalysis[]) {
 
 /**
  * 執行搜尋並發送通知
+ * 透過 Web API 的 Playwright 爬蟲搜尋，不消耗付費 API
+ * 即時通知：每找到一筆符合條件的機票就立刻發送 Telegram 通知
  */
 export async function runSearchAndNotify(): Promise<void> {
-    const results = await runSearchJob();
+    console.log('🔍 開始搜尋便宜機票（爬蟲模式）...');
+    const searchStartTime = new Date();
+    const sentFlightIds = new Set<string>();
+    let totalSent = 0;
+    let pollTimer: ReturnType<typeof setInterval> | null = null;
+    let searchDone = false;
 
-    // 儲存到資料庫
-    if (results.length > 0) {
-        await saveFlightResults(results);
-    }
+    // 輪詢 DB 找新機票並即時發送
+    const pollAndNotify = async () => {
+        try {
+            const now = new Date();
+            const newFlights = await db.flight.findMany({
+                where: {
+                    createdAt: { gte: searchStartTime },
+                    isRoundTrip: true,
+                    price: { gt: 0, lte: settings.user.priceThreshold },
+                    departureTime: { gte: now },
+                },
+                orderBy: { price: 'asc' },
+            });
 
-    if (results.length === 0) {
-        console.log('😴 沒有符合條件的便宜機票');
-        return;
-    }
+            for (const flight of newFlights) {
+                if (sentFlightIds.has(flight.id)) continue;
+                sentFlightIds.add(flight.id);
 
-    // 取得前 10 個最便宜的結果
-    const topResults = results.slice(0, 10);
-
-    // 建立通知
-    const alert: AlertMessage = {
-        type: 'new_deal',
-        title: '發現便宜機票！',
-        flights: topResults,
-        createdAt: new Date(),
+                try {
+                    const message = formatSingleFlightMessage(flight);
+                    await sendMessage(message);
+                    totalSent++;
+                    console.log(`📤 已發送：${flight.airline} ${flight.origin}→${flight.destination} NT$${flight.price}`);
+                    // 避免 Telegram 速率限制
+                    await new Promise(r => setTimeout(r, 1000));
+                } catch (err: any) {
+                    console.error(`❌ 發送通知失敗:`, err.message);
+                }
+            }
+        } catch (err: any) {
+            console.error('❌ 輪詢 DB 失敗:', err.message);
+        }
     };
 
-    // 發送通知
-    await sendFlightAlert(alert);
-    console.log(`📤 已發送 ${topResults.length} 個機票通知`);
+    try {
+        // 啟動 DB 輪詢（每 15 秒檢查一次新機票）
+        pollTimer = setInterval(pollAndNotify, 15000);
+
+        // 觸發 Web API 爬蟲搜尋（等待完成）
+        await fetchFlightsViaWebApi();
+        searchDone = true;
+
+        // 搜尋完成後最後輪詢一次
+        await pollAndNotify();
+
+        const duration = ((Date.now() - searchStartTime.getTime()) / 1000).toFixed(1);
+        console.log(`✅ 搜尋完成，耗時 ${duration} 秒`);
+
+        if (totalSent === 0) {
+            console.log('😴 沒有符合條件的便宜機票');
+        } else {
+            console.log(`📤 共發送 ${totalSent} 筆機票通知`);
+            await sendSimpleNotification(
+                '✅ 搜尋完成',
+                `本次共找到 ${totalSent} 筆符合條件的便宜機票`
+            );
+        }
+
+    } catch (error: any) {
+        console.error('❌ 搜尋發生錯誤:', error.message || error);
+        // 搜尋失敗但可能已經有部分結果，做最後一次輪詢
+        if (!searchDone) {
+            await pollAndNotify();
+        }
+        if (totalSent === 0) {
+            await sendSimpleNotification(
+                '⚠️ 搜尋失敗',
+                '無法連線到 Web API，請確認 Web 伺服器是否運行中。'
+            );
+        }
+    } finally {
+        if (pollTimer) clearInterval(pollTimer);
+    }
 }
 
 // =====================================================

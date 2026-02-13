@@ -49,6 +49,9 @@ coverage/
 tmp/
 temp/
 .cache/
+docker-data/
+*.tsbuildinfo
+nul
 
 # Next.js (Web UI)
 web/.next/

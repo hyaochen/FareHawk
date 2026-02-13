@@ -1,0 +1,18 @@
+services:
+  farehawk:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: farehawk
+    restart: unless-stopped
+    ports:
+      - "3003:3003"
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=file:/app/data/fly.db
+      - WEB_PORT=3003
+    volumes:
+      # SQLite 資料庫持久化（方便主機直接備份）
+      - ./docker-data:/app/data

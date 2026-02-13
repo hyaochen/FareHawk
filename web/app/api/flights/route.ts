@@ -8,6 +8,7 @@
  * 4. SerpApi 搜的是「航線+日期」，回傳該航線所有航空公司的航班
  * 5. 日期從「今天 + N 天」開始算，不是從今天
  */
+// @ts-nocheck
 
 import { NextRequest, NextResponse } from 'next/server';
 import { db } from '../../../lib/db';
@@ -17,15 +18,15 @@ import { scrapeGoogleFlights, buildSearchUrl } from '../../../lib/crawlers/googl
 
 const SERPAPI_API_KEY = process.env.SERPAPI_API_KEY;
 
-// 預設設定
+// 預設設定（從環境變數讀取，保持與後端 .env 同步）
 const defaultSettings = {
-    userLocation: '屏東市',
-    departureAirports: ['TPE', 'TSA', 'KHH'],
-    destinations: ['NRT', 'KIX', 'ICN', 'BKK', 'SIN', 'FUK', 'OKA'],
-    tripDurations: [3, 4, 5, 7],
-    priceThreshold: 20000,
-    searchDaysAhead: 60,
-    startDaysAhead: 7, // 從幾天後開始搜尋
+    userLocation: process.env.USER_LOCATION || '台北市',
+    departureAirports: (process.env.PREFERRED_AIRPORTS || 'TPE,TSA').split(',').filter(Boolean),
+    destinations: (process.env.WATCH_DESTINATIONS || 'NRT,HND,KIX,ICN').split(',').filter(Boolean),
+    tripDurations: (process.env.TRIP_DURATIONS || '3,4,5,7').split(',').map(Number).filter(n => !isNaN(n)),
+    priceThreshold: parseInt(process.env.PRICE_ALERT_THRESHOLD || '20000') || 20000,
+    searchDaysAhead: parseInt(process.env.SEARCH_DAYS_AHEAD || '60') || 60,
+    startDaysAhead: parseInt(process.env.START_DAYS_AHEAD || '7') || 7,
 };
 
 // 每次 refresh 最多消耗的 SerpApi 搜尋次數
@@ -795,9 +796,9 @@ export async function GET(request: NextRequest) {
         });
         if (badFlights.length > 0) {
             // 先刪除相關 priceHistory，再刪除航班
-            await db.priceHistory.deleteMany({ where: { flightId: { in: badFlights.map(f => f.id) } } });
+            await db.priceHistory.deleteMany({ where: { flightId: { in: badFlights.map((f: { id: string }) => f.id) } } });
             const deleted = await db.flight.deleteMany({
-                where: { id: { in: badFlights.map(f => f.id) } },
+                where: { id: { in: badFlights.map((f: { id: string }) => f.id) } },
             });
             console.log(`[清理] 刪除 ${deleted.count} 筆航空公司名稱錯誤的記錄`);
         }
@@ -823,7 +824,7 @@ export async function GET(request: NextRequest) {
         const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
 
         const formattedFlights = flights
-            .map(f => {
+            .map((f: any) => {
                 const transport = transportCosts[f.origin]?.[userSettings.userLocation]
                     || { cost: 500, method: '預估交通費', duration: '未知', reference: '' };
                 const tags: string[] = JSON.parse(f.tags || '[]');

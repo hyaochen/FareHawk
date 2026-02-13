@@ -70,8 +70,16 @@ function setupCommands(bot: Bot) {
 
     // /search 指令
     bot.command('search', async (ctx) => {
-        await ctx.reply('🔍 正在搜尋便宜機票，請稍候...');
-        // 實際搜尋邏輯會在 scheduler 中執行
+        await ctx.reply('🔍 正在搜尋便宜機票，請稍候...\n這可能需要幾分鐘時間。');
+        try {
+            // 動態匯入避免循環依賴
+            const { runSearchAndNotify } = await import('./scheduler.js');
+            await runSearchAndNotify();
+            await ctx.reply('✅ 搜尋完成！');
+        } catch (error) {
+            console.error('手動搜尋失敗:', error);
+            await ctx.reply('❌ 搜尋過程中發生錯誤，請檢查日誌。');
+        }
     });
 
     // /settings 指令

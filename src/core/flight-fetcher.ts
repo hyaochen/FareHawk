@@ -212,14 +212,19 @@ class MockFetcher implements FlightFetcher {
  * 獲取可用的機票擷取器
  */
 export function getAvailableFetcher(): FlightFetcher {
-    // 優先使用 SerpApi
-    const serpApi = new SerpApiFetcher();
-    if (serpApi.isConfigured) {
-        return serpApi;
+    // 只有在明確啟用時才使用 SerpAPI
+    const useSerpApi = process.env.USE_SERPAPI === 'true';
+
+    if (useSerpApi) {
+        const serpApi = new SerpApiFetcher();
+        if (serpApi.isConfigured) {
+            return serpApi;
+        }
+        console.warn('⚠️  USE_SERPAPI=true 但未配置 SERPAPI_API_KEY');
     }
 
-    // 如果沒有配置任何 API，使用模擬資料
-    console.warn('⚠️  未配置任何機票 API，使用模擬資料');
+    // 預設使用模擬資料（不消耗 API 額度）
+    console.warn('⚠️  使用模擬資料模式（如需 SerpAPI 請設定 USE_SERPAPI=true）');
     return new MockFetcher();
 }
 
