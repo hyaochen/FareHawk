@@ -6,7 +6,7 @@ services:
     container_name: farehawk
     restart: unless-stopped
     ports:
-      - "3003:3003"
+      - "127.0.0.1:3003:3003"
     env_file:
       - .env
     environment:
